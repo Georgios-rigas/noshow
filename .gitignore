@@ -1,0 +1,18 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+
+# ---- Virtual environments (Windows venv) ----
+noshow/Lib/
+noshow/Include/
+noshow/Scripts/
+pyvenv.cfg
+.venv/
+venv/
+
+# ---- VS Code settings ----
+.vscode/
+
+# ---- Model artifacts (tracked with LFS) ----
+*.joblib
+*.joblib.gz
