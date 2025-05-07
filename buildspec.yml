@@ -13,9 +13,9 @@ phases:
   pre_build:
     commands:
       - echo "Logging in to Amazon ECR..."
-      - aws ecr get-login-password --region $AWS_REGION |
+      - aws ecr get-login-password --region $AWS_REGION | \
         docker login --username AWS --password-stdin \
-        $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+        "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
       - COMMIT_HASH=${CODEBUILD_RESOLVED_SOURCE_VERSION:0:7}
       - IMAGE_TAG=$COMMIT_HASH
       - echo "Image tag is $IMAGE_TAG"
