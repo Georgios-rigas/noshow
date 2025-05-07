@@ -1,48 +1,39 @@
-# buildspec.yml — CodeBuild instructions: build → push → deploy
+# buildspec.yml  – Build Docker image, push to ECR, create imagedefinitions.json
 version: 0.2
 
 env:
   variables:
     AWS_REGION: eu-west-1
     AWS_ACCOUNT_ID: "339493409635"
-    ECR_REPO: gr/noshow                   # existing ECR repo
+    ECR_REPO: gr/noshow                     # existing private ECR repo
     ECS_CLUSTER: car-repair-cluster
     ECS_SERVICE: car-repair-api-task-service
-  # Add runtime-versions to specify Docker environment
-  runtime-versions:
-    docker: 20
 
 phases:
   pre_build:
     commands:
       - echo "Logging in to Amazon ECR..."
-      - aws ecr get-login-password --region $AWS_REGION | \
+      - aws ecr get-login-password --region $AWS_REGION |
         docker login --username AWS --password-stdin \
         $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
       - COMMIT_HASH=${CODEBUILD_RESOLVED_SOURCE_VERSION:0:7}
       - IMAGE_TAG=$COMMIT_HASH
-      - echo "Image tag set to $IMAGE_TAG"
+      - echo "Image tag is $IMAGE_TAG"
   build:
     commands:
       - echo "Building Docker image..."
       - docker build -t $ECR_REPO:$IMAGE_TAG .
-      - docker tag $ECR_REPO:$IMAGE_TAG \
+      - docker tag  $ECR_REPO:$IMAGE_TAG \
         $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:$IMAGE_TAG
       - echo "Pushing image to ECR..."
       - docker push \
         $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:$IMAGE_TAG
   post_build:
     commands:
-      - echo "Generating imagedefinitions.json for ECS deploy..."
-      - |
-        cat > imagedefinitions.json <<EOF
-        [
-          {
-            "name": "car-repair-api-container",
-            "imageUri": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
-          }
-        ]
-        EOF
+      - echo "Creating imagedefinitions.json for ECS deploy..."
+      - printf '[{"name":"car-repair-api-container","imageUri":"%s.dkr.ecr.%s.amazonaws.com/%s:%s"}]' \
+        $AWS_ACCOUNT_ID $AWS_REGION $ECR_REPO $IMAGE_TAG \
+        > imagedefinitions.json
 
 artifacts:
   files:
