@@ -24,11 +24,19 @@ phases:
       - docker tag $ECR_REPO:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:$IMAGE_TAG
       - echo "Pushing image to ECR..."
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:$IMAGE_TAG
-  post_build:
-    commands:
-      - echo "Generating imagedefinitions.json for ECS deploy..."
-      - printf '[{"name":"car-repair-api-container","imageUri":"%s.dkr.ecr.%s.amazonaws.com/%s:%s"}]' \
-        $AWS_ACCOUNT_ID $AWS_REGION $ECR_REPO $IMAGE_TAG > imagedefinitions.json
+post_build:
+  commands:
+    - echo "Generating imagedefinitions.json for ECS deploy..."
+    - |
+      cat > imagedefinitions.json <<EOF
+      [
+        {
+          "name": "car-repair-api-container",
+          "imageUri": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
+        }
+      ]
+EOF      # ←‑‑ EOF must start in column 1 of the block (no spaces)
+
 artifacts:
   files:
     - imagedefinitions.json
