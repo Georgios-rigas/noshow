@@ -6,7 +6,7 @@ env:
   variables:
     AWS_REGION: eu-west-1                        
     AWS_ACCOUNT_ID: "339493409635"              # <‑‑ replace with your account
-    ECR_REPO: noshow                            # <‑‑ ECR repo name
+    ECR_REPO: gr/noshow                            # <‑‑ ECR repo name
     ECS_CLUSTER: car-repair-cluster             # <‑‑ ECS cluster
     ECS_SERVICE: car-repair-api-task-service    # <‑‑ ECS service
 phases:
