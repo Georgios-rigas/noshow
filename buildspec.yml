@@ -5,7 +5,7 @@ env:
   variables:
     AWS_REGION: eu-west-1
     AWS_ACCOUNT_ID: "339493409635"
-    ECR_REPO: gr/noshow                   # existing ECR repo
+    ECR_REPO: gr/noshow                 # existing ECR repo (trailing spaces removed)
     ECS_CLUSTER: car-repair-cluster
     ECS_SERVICE: car-repair-api-task-service
 
@@ -28,8 +28,8 @@ phases:
       - echo "Pushing image to ECR..."
       - docker push \
         $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:$IMAGE_TAG
-  post_build:
-    commands:
+post_build:
+  commands:
       - echo "Generating imagedefinitions.json for ECS deploy..."
       - |
         cat > imagedefinitions.json <<EOF
@@ -39,7 +39,7 @@ phases:
             "imageUri": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
           }
         ]
-        EOF
+EOF
 
 artifacts:
   files:
