@@ -1,0 +1,117 @@
+﻿{
+    "taskDefinition":  {
+                           "taskDefinitionArn":  "arn:aws:ecs:eu-west-1:339493409635:task-definition/car-repair-api-task:3",
+                           "containerDefinitions":  [
+                                                        {
+                                                            "name":  "car-repair-api-container",
+                                                            "image":  "339493409635.dkr.ecr.eu-west-1.amazonaws.com/gr/noshow:health-check",
+                                                            "cpu":  0,
+                                                            "portMappings":  [
+                                                                                 {
+                                                                                     "containerPort":  8000,
+                                                                                     "hostPort":  8000,
+                                                                                     "protocol":  "tcp",
+                                                                                     "name":  "car-repair-api-container-8000-tcp",
+                                                                                     "appProtocol":  "http"
+                                                                                 }
+                                                                             ],
+                                                            "essential":  true,
+                                                            "environment":  [
+
+                                                                            ],
+                                                            "environmentFiles":  [
+
+                                                                                 ],
+                                                            "mountPoints":  [
+
+                                                                            ],
+                                                            "volumesFrom":  [
+
+                                                                            ],
+                                                            "ulimits":  [
+
+                                                                        ],
+                                                            "logConfiguration":  {
+                                                                                     "logDriver":  "awslogs",
+                                                                                     "options":  {
+                                                                                                     "awslogs-group":  "/ecs/car-repair-api-task",
+                                                                                                     "mode":  "non-blocking",
+                                                                                                     "awslogs-create-group":  "true",
+                                                                                                     "max-buffer-size":  "25m",
+                                                                                                     "awslogs-region":  "eu-west-1",
+                                                                                                     "awslogs-stream-prefix":  "ecs"
+                                                                                                 },
+                                                                                     "secretOptions":  [
+
+                                                                                                       ]
+                                                                                 },
+                                                            "systemControls":  [
+
+                                                                               ]
+                                                        }
+                                                    ],
+                           "family":  "car-repair-api-task",
+                           "taskRoleArn":  "arn:aws:iam::339493409635:role/car-repair-api-task-role",
+                           "executionRoleArn":  "arn:aws:iam::339493409635:role/ecsTaskExecutionRole",
+                           "networkMode":  "awsvpc",
+                           "revision":  3,
+                           "volumes":  [
+
+                                       ],
+                           "status":  "ACTIVE",
+                           "requiresAttributes":  [
+                                                      {
+                                                          "name":  "com.amazonaws.ecs.capability.logging-driver.awslogs"
+                                                      },
+                                                      {
+                                                          "name":  "ecs.capability.execution-role-awslogs"
+                                                      },
+                                                      {
+                                                          "name":  "com.amazonaws.ecs.capability.ecr-auth"
+                                                      },
+                                                      {
+                                                          "name":  "com.amazonaws.ecs.capability.docker-remote-api.1.19"
+                                                      },
+                                                      {
+                                                          "name":  "com.amazonaws.ecs.capability.docker-remote-api.1.28"
+                                                      },
+                                                      {
+                                                          "name":  "com.amazonaws.ecs.capability.task-iam-role"
+                                                      },
+                                                      {
+                                                          "name":  "ecs.capability.execution-role-ecr-pull"
+                                                      },
+                                                      {
+                                                          "name":  "com.amazonaws.ecs.capability.docker-remote-api.1.18"
+                                                      },
+                                                      {
+                                                          "name":  "ecs.capability.task-eni"
+                                                      },
+                                                      {
+                                                          "name":  "com.amazonaws.ecs.capability.docker-remote-api.1.29"
+                                                      }
+                                                  ],
+                           "placementConstraints":  [
+
+                                                    ],
+                           "compatibilities":  [
+                                                   "EC2",
+                                                   "FARGATE"
+                                               ],
+                           "runtimePlatform":  {
+                                                   "cpuArchitecture":  "X86_64",
+                                                   "operatingSystemFamily":  "LINUX"
+                                               },
+                           "requiresCompatibilities":  [
+                                                           "FARGATE"
+                                                       ],
+                           "cpu":  "1024",
+                           "memory":  "3072",
+                           "registeredAt":  "2025-05-06T19:18:20.189000+01:00",
+                           "registeredBy":  "arn:aws:sts::339493409635:assumed-role/AWSReservedSSO_AdministratorAccess_e293b050c4439342/georgios.rigas@valcon.com",
+                           "enableFaultInjection":  false
+                       },
+    "tags":  [
+
+             ]
+}

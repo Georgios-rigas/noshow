@@ -1,0 +1,16 @@
+# requirements.txt
+
+# Core API framework
+fastapi>=0.80.0,<0.111.0
+uvicorn[standard]>=0.18.0,<0.28.0 # Includes standard dependencies like watchfiles for reload
+
+# Data handling and ML
+# IMPORTANT: Use versions consistent with the environment where the components were saved.
+pandas>=1.3.0,<2.3.0       # Use specific version (e.g., pandas==1.5.3) if known
+scikit-learn==1.6.1       # Pinning to the version needed to load the saved components
+xgboost>=1.5.0,<2.1.0     # Use specific version (e.g., xgboost==1.7.5) if known
+joblib>=1.1.0,<1.5.0      # For loading the component files
+
+# Pydantic is installed as a dependency of FastAPI
+
+# Add any other specific libraries your preprocessing or model needs, pinning their versions too

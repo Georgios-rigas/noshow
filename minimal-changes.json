@@ -1,0 +1,11 @@
+{
+    "family": "car-repair-api-task",
+    "containerDefinitions": [
+        {
+            "name": "car-repair-api-container",
+            "linuxParameters": {
+                "initProcessEnabled": true
+            }
+        }
+    ]
+}
