@@ -9,11 +9,12 @@ from sklearn.compose import ColumnTransformer
 from xgboost import XGBClassifier
 
 # --- Pydantic Model for Input Validation ---
+# This model now directly represents the flat structure of features
 class CarFeatures(BaseModel):
     MILEAGE: float
     VEHICLE_AGE: int
     REPORTED_ISSUES: int
-    ACCIDENT_HISTORY: int
+    ACCIDENT_HISTORY: int # Your Postman showed 0.0 in the query, but your model has int. Pydantic will coerce.
     ENGINE_SIZE: float
     FUEL_EFFICIENCY: float
     INSURANCE_PREMIUM: float
@@ -40,8 +41,7 @@ class CarFeatures(BaseModel):
             }
         }
 
-class PredictionInput(BaseModel):
-    features: CarFeatures
+# PredictionInput class is no longer needed if we take CarFeatures directly for flat JSON
 
 # --- Feature Order (Must match training) ---
 numeric_features = ["MILEAGE", "VEHICLE_AGE", "REPORTED_ISSUES", "ACCIDENT_HISTORY", "ENGINE_SIZE", "FUEL_EFFICIENCY", "INSURANCE_PREMIUM", "ODOMETER_READING", "SERVICE_HISTORY"]
@@ -51,15 +51,15 @@ feature_names_in_order = numeric_features + categorical_features
 # --- FastAPI App Initialization ---
 app = FastAPI(
     title="Car Repair Show/No-Show Predictor (Components)",
-    description="API using separate preprocessor and classifier.",
-    version="1.2.0"  # Incremented version to reflect Snowflake compatibility
+    description="API using separate preprocessor and classifier. Now with Snowflake compatibility.",
+    version="1.3.0"  # Incremented version
 )
 
 # --- Model Component Loading ---
 PREPROCESSOR_FILE = "preprocessor_resaved.joblib.gz"
 CLASSIFIER_FILE = "classifier_resaved.joblib.gz"
-preprocessor: ColumnTransformer = None
-classifier: XGBClassifier = None
+preprocessor: Optional[ColumnTransformer] = None # Use Optional
+classifier: Optional[XGBClassifier] = None      # Use Optional
 
 @app.on_event("startup")
 def load_components():
@@ -87,8 +87,10 @@ def load_components():
             classifier_loaded = True
         except Exception as e:
             print(f"FATAL ERROR: Failed to load classifier from '{CLASSIFIER_FILE}': {e}")
+
     if not preprocessor_loaded or not classifier_loaded:
         print("WARNING: One or both model components failed to load. Predict endpoint will fail.")
+        # Keep them as None if loading failed
         preprocessor = None
         classifier = None
 
@@ -107,14 +109,15 @@ async def read_root():
 # --- Dedicated Health Check Endpoint ---
 @app.get("/health", status_code=status.HTTP_200_OK, tags=["Health Check"])
 async def health_check():
-    """Simple health check endpoint that returns status 200 OK."""
-    # This endpoint does nothing complex, just returns OK.
-    # Useful for Load Balancer health checks.
     return {"status": "ok"}
 
 # --- Prediction Endpoint with Snowflake Compatibility ---
-@app.post("/predict", tags=["Prediction"])
-async def predict(payload: PredictionInput, snowflake_format: bool = Query(False, description="Return response in Snowflake-compatible format")):
+# Changed path to match your working Postman URL and input model to CarFeatures
+@app.post("/v1/predict-snowflake", tags=["Prediction"])
+async def predict(
+    payload: CarFeatures, # Changed from PredictionInput to CarFeatures for flat JSON
+    snowflake_format: bool = Query(False, description="Return response in Snowflake-compatible format. Set to true when calling from Snowflake.")
+):
     """Predicts show/no-show using separate preprocessor and classifier.
     
     Set snowflake_format=true for Snowflake External Function compatibility.
@@ -126,8 +129,8 @@ async def predict(payload: PredictionInput, snowflake_format: bool = Query(False
             detail="Model components are not loaded. Please check server logs."
         )
     try:
-        # Extract features
-        features_dict = payload.features.dict()
+        # Extract features - now directly from payload as it's CarFeatures
+        features_dict = payload.model_dump() # Use model_dump() for Pydantic v2+ or .dict() for v1
         input_df = pd.DataFrame([features_dict], columns=feature_names_in_order)
         
         # Debug prints
@@ -139,7 +142,7 @@ async def predict(payload: PredictionInput, snowflake_format: bool = Query(False
         print(f"Raw prediction: {prediction_numeric}")
         
         # Convert numeric prediction to label
-        label_map_inv = {1: 'Show', 0: 'No-Show'}
+        label_map_inv = {1: 'Show', 0: 'No-Show'} # Assuming 1 is Show, 0 is No-Show
         prediction_label = label_map_inv.get(prediction_numeric[0], 'Unknown Prediction Value')
         
         # Return in appropriate format
@@ -147,7 +150,7 @@ async def predict(payload: PredictionInput, snowflake_format: bool = Query(False
             # Snowflake-compatible format
             return {
                 "data": [
-                    [prediction_label]
+                    [0, prediction_label] # ADDED row_index 0 here
                 ]
             }
         else:
@@ -161,17 +164,18 @@ async def predict(payload: PredictionInput, snowflake_format: bool = Query(False
         print(f"Prediction Error: Value error - {ve}")
         raise HTTPException(status_code=400, detail=f"Error processing feature values: {ve}")
     except Exception as e:
-        print(f"Prediction Error: Unexpected error - {e}")
+        print(f"Prediction Error: Unexpected error - {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
-            detail="An unexpected error occurred during prediction."
+            detail=f"An unexpected error occurred during prediction: {type(e).__name__}"
         )
 
 # --- Optional: Main block to run Uvicorn directly ---
 if __name__ == "__main__":
     print("Starting Uvicorn server directly...")
+    # Ensure you have a 'main.py' if you run uvicorn main:app, or adjust if your file is named differently
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
 
 
