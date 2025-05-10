@@ -1,7 +1,6 @@
-# main.py
-from fastapi import FastAPI, HTTPException, Response, status # Add Response, status
+from fastapi import FastAPI, HTTPException, Response, status, Query
 from pydantic import BaseModel, Field
-from typing import List, Union
+from typing import List, Union, Optional
 import joblib
 import pandas as pd
 import os
@@ -10,7 +9,6 @@ from sklearn.compose import ColumnTransformer
 from xgboost import XGBClassifier
 
 # --- Pydantic Model for Input Validation ---
-# (CarFeatures and PredictionInput remain the same)
 class CarFeatures(BaseModel):
     MILEAGE: float
     VEHICLE_AGE: int
@@ -54,7 +52,7 @@ feature_names_in_order = numeric_features + categorical_features
 app = FastAPI(
     title="Car Repair Show/No-Show Predictor (Components)",
     description="API using separate preprocessor and classifier.",
-    version="1.1.0" # Consider incrementing version
+    version="1.2.0"  # Incremented version to reflect Snowflake compatibility
 )
 
 # --- Model Component Loading ---
@@ -94,7 +92,7 @@ def load_components():
         preprocessor = None
         classifier = None
 
-# --- Health Check Endpoint (Original - keep for comparison/testing) ---
+# --- Health Check Endpoint ---
 @app.get("/", tags=["Health Check"])
 async def read_root():
     """Basic health check endpoint."""
@@ -106,7 +104,7 @@ async def read_root():
         "classifier_status": classifier_status
     }
 
-# --- NEW Dedicated Health Check Endpoint ---
+# --- Dedicated Health Check Endpoint ---
 @app.get("/health", status_code=status.HTTP_200_OK, tags=["Health Check"])
 async def health_check():
     """Simple health check endpoint that returns status 200 OK."""
@@ -114,10 +112,13 @@ async def health_check():
     # Useful for Load Balancer health checks.
     return {"status": "ok"}
 
-# --- Prediction Endpoint ---
+# --- Prediction Endpoint with Snowflake Compatibility ---
 @app.post("/predict", tags=["Prediction"])
-async def predict(payload: PredictionInput):
-    """Predicts show/no-show using separate preprocessor and classifier."""
+async def predict(payload: PredictionInput, snowflake_format: bool = Query(False, description="Return response in Snowflake-compatible format")):
+    """Predicts show/no-show using separate preprocessor and classifier.
+    
+    Set snowflake_format=true for Snowflake External Function compatibility.
+    """
     global preprocessor, classifier
     if preprocessor is None or classifier is None:
         raise HTTPException(
@@ -125,23 +126,40 @@ async def predict(payload: PredictionInput):
             detail="Model components are not loaded. Please check server logs."
         )
     try:
+        # Extract features
         features_dict = payload.features.dict()
         input_df = pd.DataFrame([features_dict], columns=feature_names_in_order)
-        print("Applying preprocessor...") # Debug print
+        
+        # Debug prints
+        print("Applying preprocessor...")
         processed_features = preprocessor.transform(input_df)
-        print("Preprocessing complete.") # Debug print
-        print("Applying classifier...") # Debug print
+        print("Preprocessing complete.")
+        print("Applying classifier...")
         prediction_numeric = classifier.predict(processed_features)
-        print(f"Raw prediction: {prediction_numeric}") # Debug print
+        print(f"Raw prediction: {prediction_numeric}")
+        
+        # Convert numeric prediction to label
         label_map_inv = {1: 'Show', 0: 'No-Show'}
         prediction_label = label_map_inv.get(prediction_numeric[0], 'Unknown Prediction Value')
-        return {"prediction": prediction_label}
+        
+        # Return in appropriate format
+        if snowflake_format:
+            # Snowflake-compatible format
+            return {
+                "data": [
+                    [prediction_label]
+                ]
+            }
+        else:
+            # Standard API format for other clients
+            return {"prediction": prediction_label}
+            
     except KeyError as ke:
-         print(f"Prediction Error: Missing feature - {ke}")
-         raise HTTPException(status_code=400, detail=f"Missing feature in input data: {ke}")
+        print(f"Prediction Error: Missing feature - {ke}")
+        raise HTTPException(status_code=400, detail=f"Missing feature in input data: {ke}")
     except ValueError as ve:
-         print(f"Prediction Error: Value error - {ve}")
-         raise HTTPException(status_code=400, detail=f"Error processing feature values: {ve}")
+        print(f"Prediction Error: Value error - {ve}")
+        raise HTTPException(status_code=400, detail=f"Error processing feature values: {ve}")
     except Exception as e:
         print(f"Prediction Error: Unexpected error - {e}")
         import traceback
@@ -155,3 +173,6 @@ async def predict(payload: PredictionInput):
 if __name__ == "__main__":
     print("Starting Uvicorn server directly...")
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+
+
+
