@@ -1,14 +1,22 @@
 from fastapi import FastAPI, HTTPException, Response, status, Query
-from pydantic import BaseModel, Field
-from typing import List, Union, Optional, Tuple, Any # Added Tuple and Any
+from pydantic import BaseModel, Field 
+from typing import List, Union, Optional, Tuple, Any 
 import joblib
 import pandas as pd
 import os
 import uvicorn
 from sklearn.compose import ColumnTransformer
 from xgboost import XGBClassifier
+import boto3 # For S3 interaction
+from botocore.exceptions import NoCredentialsError, PartialCredentialsError, ClientError
+import tempfile # For temporary file handling
 
-# --- Pydantic Model for your actual features (this remains the same) ---
+# --- Configuration for S3 Model Loading ---
+S3_BUCKET_NAME = 'noshow-model' # Your S3 bucket name
+S3_PREPROCESSOR_KEY = 'models/preprocessor_retrained.joblib.gz' # Key for the preprocessor in S3
+S3_CLASSIFIER_KEY = 'models/classifier_retrained.joblib.gz'   # Key for the classifier in S3
+
+# --- Pydantic Model for your actual features ---
 class CarFeatures(BaseModel):
     MILEAGE: float
     VEHICLE_AGE: int
@@ -28,7 +36,20 @@ class CarFeatures(BaseModel):
     BRAKE_CONDITION: str
     TIRE_CONDITION: str
 
-    class Config: # Your example data is fine here
+    class Config: 
+        # Pydantic V2 uses model_config = {"json_schema_extra": {...}}
+        # Pydantic V1 uses schema_extra = {...}
+        # For compatibility, you might need to adjust based on your Pydantic version
+        # If using Pydantic V2:
+        # model_config = {
+        #     "json_schema_extra": {
+        #         "example": {
+        #             "MILEAGE": 50000.5, "VEHICLE_AGE": 5, "REPORTED_ISSUES": 1,
+        #             # ... rest of your example
+        #         }
+        #     }
+        # }
+        # For Pydantic V1 (as originally in your code):
         schema_extra = {
             "example": {
                 "MILEAGE": 50000.5, "VEHICLE_AGE": 5, "REPORTED_ISSUES": 1,
@@ -40,68 +61,109 @@ class CarFeatures(BaseModel):
             }
         }
 
-# --- NEW Pydantic Model to represent Snowflake's request body structure ---
+
+# --- Pydantic Model to represent Snowflake's request body structure ---
 class SnowflakeRequest(BaseModel):
     data: List[Tuple[int, CarFeatures]]
-    # This expects a JSON like: {"data": [[0, {"MILEAGE": ..., "VEHICLE_AGE": ...S}], ...]}
 
 # --- Feature Order (Must match training) ---
-# (Your feature_names_in_order remains the same)
 numeric_features = ["MILEAGE", "VEHICLE_AGE", "REPORTED_ISSUES", "ACCIDENT_HISTORY", "ENGINE_SIZE", "FUEL_EFFICIENCY", "INSURANCE_PREMIUM", "ODOMETER_READING", "SERVICE_HISTORY"]
 categorical_features = ["VEHICLE_MODEL", "MAINTENANCE_HISTORY", "OWNER_TYPE", "FUEL_TYPE", "TRANSMISSION_TYPE", "BATTERY_STATUS", "BRAKE_CONDITION", "TIRE_CONDITION"]
 feature_names_in_order = numeric_features + categorical_features
 
-
-# --- FastAPI App Initialization (remains the same) ---
+# --- FastAPI App Initialization ---
 app = FastAPI(
-    title="Car Repair Show/No-Show Predictor (Components)",
-    description="API using separate preprocessor and classifier. Snowflake compatible.",
-    version="1.4.0" 
+    title="Car Repair Show/No-Show Predictor (S3 Models)",
+    description="API using separate preprocessor and classifier loaded from S3. Snowflake compatible.",
+    version="1.5.0" 
 )
 
-# --- Model Component Loading (remains the same) ---
-# (@app.on_event("startup") def load_components(): ... )
-PREPROCESSOR_FILE = "preprocessor_resaved.joblib.gz"
-CLASSIFIER_FILE = "classifier_resaved.joblib.gz"
+# --- Global variables for loaded model components ---
 preprocessor: Optional[ColumnTransformer] = None 
-classifier: Optional[XGBClassifier] = None      
+classifier: Optional[XGBClassifier] = None     
 
 @app.on_event("startup")
 def load_components():
+    """Load the preprocessor and classifier from S3 when the application starts."""
     global preprocessor, classifier
-    # ... (your existing loading logic) ...
-    # (Make sure your print statements for loading are still there for debugging startup)
-    # Load Preprocessor
-    if not os.path.exists(PREPROCESSOR_FILE):
-        print(f"FATAL ERROR: Preprocessor file not found at '{os.path.abspath(PREPROCESSOR_FILE)}'")
-    else:
+    
+    # Use a temporary directory to download S3 files
+    # This ensures files are cleaned up after loading or if an error occurs
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_s3_preprocessor_file = os.path.join(tmpdir, "preprocessor_from_s3.joblib.gz")
+        local_s3_classifier_file = os.path.join(tmpdir, "classifier_from_s3.joblib.gz")
+        
+        preprocessor_loaded_s3 = False
+        classifier_loaded_s3 = False
+        s3_client = None # Initialize s3_client
+
         try:
-            preprocessor = joblib.load(PREPROCESSOR_FILE)
-            print(f"Preprocessor loaded successfully from '{PREPROCESSOR_FILE}'.")
+            # Initialize S3 client. 
+            # For ECS, this will use the Task Role's credentials.
+            # For local testing, it uses your local AWS CLI/env var credentials.
+            s3_client = boto3.client('s3') 
+            print(f"Attempting to download preprocessor from s3://{S3_BUCKET_NAME}/{S3_PREPROCESSOR_KEY} to {local_s3_preprocessor_file}")
+            s3_client.download_file(S3_BUCKET_NAME, S3_PREPROCESSOR_KEY, local_s3_preprocessor_file)
+            preprocessor = joblib.load(local_s3_preprocessor_file)
+            print(f"Preprocessor loaded successfully from S3 object: s3://{S3_BUCKET_NAME}/{S3_PREPROCESSOR_KEY}")
+            preprocessor_loaded_s3 = True
+
+        except NoCredentialsError:
+            print(f"S3 Load Error (Preprocessor): AWS credentials not found. Ensure the ECS Task Role (or local environment) has S3 read permissions.")
+        except PartialCredentialsError:
+            print(f"S3 Load Error (Preprocessor): Incomplete AWS credentials found.")
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchKey':
+                print(f"S3 Load Error (Preprocessor): Object not found at s3://{S3_BUCKET_NAME}/{S3_PREPROCESSOR_KEY}")
+            elif e.response['Error']['Code'] == 'NoSuchBucket':
+                print(f"S3 Load Error (Preprocessor): Bucket '{S3_BUCKET_NAME}' does not exist.")
+            elif e.response['Error']['Code'] == '403': # More specific check for Forbidden
+                 print(f"S3 Load Error (Preprocessor): Access Denied (403 Forbidden) when trying to access s3://{S3_BUCKET_NAME}/{S3_PREPROCESSOR_KEY}. Check IAM permissions.")
+            else:
+                print(f"S3 Load Error (Preprocessor - ClientError): {e}")
         except Exception as e:
-            print(f"FATAL ERROR: Failed to load preprocessor from '{PREPROCESSOR_FILE}': {e}")
-            preprocessor = None # Ensure it's None if load fails
-    # Load Classifier
-    if not os.path.exists(CLASSIFIER_FILE):
-        print(f"FATAL ERROR: Classifier file not found at '{os.path.abspath(CLASSIFIER_FILE)}'")
-    else:
+            print(f"FATAL ERROR: Failed to load preprocessor from S3: {type(e).__name__} - {e}")
+
+        # Attempt to load classifier only if preprocessor loaded (or always attempt, depending on desired behavior)
+        # For robustness, we'll attempt to load it regardless, but it might also fail if credentials are the issue.
         try:
-            classifier = joblib.load(CLASSIFIER_FILE)
-            print(f"Classifier loaded successfully from '{CLASSIFIER_FILE}'.")
+            if not s3_client: # Initialize if previous try block failed before s3_client was set
+                s3_client = boto3.client('s3')
+            print(f"Attempting to download classifier from s3://{S3_BUCKET_NAME}/{S3_CLASSIFIER_KEY} to {local_s3_classifier_file}")
+            s3_client.download_file(S3_BUCKET_NAME, S3_CLASSIFIER_KEY, local_s3_classifier_file)
+            classifier = joblib.load(local_s3_classifier_file)
+            print(f"Classifier loaded successfully from S3 object: s3://{S3_BUCKET_NAME}/{S3_CLASSIFIER_KEY}")
+            classifier_loaded_s3 = True
+
+        except NoCredentialsError: # Should have been caught by preprocessor load already if it's a general credential issue
+            print(f"S3 Load Error (Classifier): AWS credentials not found.")
+        except PartialCredentialsError:
+            print(f"S3 Load Error (Classifier): Incomplete AWS credentials found.")
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchKey':
+                print(f"S3 Load Error (Classifier): Object not found at s3://{S3_BUCKET_NAME}/{S3_CLASSIFIER_KEY}")
+            elif e.response['Error']['Code'] == 'NoSuchBucket':
+                 print(f"S3 Load Error (Classifier): Bucket '{S3_BUCKET_NAME}' does not exist.")
+            elif e.response['Error']['Code'] == '403': # More specific check for Forbidden
+                 print(f"S3 Load Error (Classifier): Access Denied (403 Forbidden) when trying to access s3://{S3_BUCKET_NAME}/{S3_CLASSIFIER_KEY}. Check IAM permissions.")
+            else:
+                print(f"S3 Load Error (Classifier - ClientError): {e}")
         except Exception as e:
-            print(f"FATAL ERROR: Failed to load classifier from '{CLASSIFIER_FILE}': {e}")
-            classifier = None # Ensure it's None if load fails
+            print(f"FATAL ERROR: Failed to load classifier from S3: {type(e).__name__} - {e}")
 
-    if preprocessor is None or classifier is None:
-        print("WARNING: One or both model components failed to load initially. Predict endpoint will fail.")
+        if not preprocessor_loaded_s3 or not classifier_loaded_s3:
+            print("WARNING: One or both model components failed to load from S3. Predict endpoint will likely fail.")
+            # Ensure they are None if loading failed to prevent using partially loaded models
+            if not preprocessor_loaded_s3: preprocessor = None
+            if not classifier_loaded_s3: classifier = None
+        # Temporary files (local_s3_preprocessor_file, local_s3_classifier_file)
+        # are automatically cleaned up when the 'with tempfile.TemporaryDirectory() as tmpdir:' block exits.
 
-
-# --- Health Check Endpoints (remain the same) ---
-# (@app.get("/", ...) and @app.get("/health", ...))
+# --- Health Check Endpoints ---
 @app.get("/", tags=["Health Check"])
 async def read_root():
-    preprocessor_status = "loaded" if preprocessor is not None else "not loaded"
-    classifier_status = "loaded" if classifier is not None else "not loaded"
+    preprocessor_status = "loaded from S3" if preprocessor is not None else "not loaded"
+    classifier_status = "loaded from S3" if classifier is not None else "not loaded"
     return {
         "status": "API is running",
         "preprocessor_status": preprocessor_status,
@@ -112,61 +174,57 @@ async def read_root():
 async def health_check():
     return {"status": "ok"}
 
-
-# --- Prediction Endpoint MODIFIED ---
-@app.post("/v1/predict-snowflake", tags=["Prediction"]) # Assuming this is your target path
+# --- Prediction Endpoint ---
+# This endpoint logic remains the same as it uses the global preprocessor and classifier
+@app.post("/v1/predict-snowflake", tags=["Prediction"])
 async def predict(
-    # MODIFIED: Change the payload type to expect Snowflake's wrapper
     snowflake_payload: SnowflakeRequest,
-    # Query parameter snowflake_format is still useful if you want this endpoint
-    # to also serve other clients with a simpler response.
-    # API Gateway is already adding this, so it will be true for Snowflake calls.
     snowflake_format_response: bool = Query(True, alias="snowflake_format", description="Return response in Snowflake-compatible format.")
 ):
     global preprocessor, classifier
     if preprocessor is None or classifier is None:
         raise HTTPException(
-            status_code=503, # Service Unavailable
-            detail="Model components are not loaded. Please check server logs."
+            status_code=503, 
+            detail="Model components are not loaded (failed to load from S3). Please check server logs."
         )
+    
+    response_data_for_snowflake = []
+
     try:
-        # Extract the actual features for the current row from Snowflake's input format.
-        # Snowflake sends one row at a time to this API via API Gateway for each
-        # call to the external function in your SQL.
-        # So, snowflake_payload.data will be a list containing one element: [0, CarFeatures_object]
-        if not snowflake_payload.data or not isinstance(snowflake_payload.data, list) or len(snowflake_payload.data) == 0:
-            raise HTTPException(status_code=400, detail="Invalid input: 'data' array is missing or empty.")
+        if not snowflake_payload.data or not isinstance(snowflake_payload.data, list):
+            raise HTTPException(status_code=400, detail="Invalid input: 'data' array is missing or empty in payload.")
+
+        for item in snowflake_payload.data:
+            if not isinstance(item, tuple) or len(item) != 2:
+                print(f"Skipping malformed item in batch: {item}")
+                continue 
+
+            row_index: int = item[0]
+            actual_features: CarFeatures = item[1]
+            current_prediction_label = "Error: Prediction failed for this row" 
+
+            try:
+                features_dict = actual_features.model_dump() # Use model_dump() for Pydantic V2+ or .dict() for V1
+                input_df = pd.DataFrame([features_dict], columns=feature_names_in_order)
+                                
+                processed_features = preprocessor.transform(input_df)
+                prediction_numeric = classifier.predict(processed_features)
+                
+                label_map_inv = {1: 'Show', 0: 'No-Show'}
+                current_prediction_label = label_map_inv.get(prediction_numeric[0], 'Error: Unknown prediction value')
+            
+            except Exception as e_inner:
+                print(f"Error processing features for row index {row_index}: {type(e_inner).__name__} - {e_inner}")
+            
+            response_data_for_snowflake.append([row_index, current_prediction_label])
         
-        # The actual features are in the second element of the first item in the "data" list
-        # The type hint SnowflakeRequest.data: List[Tuple[int, CarFeatures]]
-        # ensures Pydantic has already validated this structure.
-        actual_features: CarFeatures = snowflake_payload.data[0][1]
-        
-        features_dict = actual_features.model_dump() # Or .dict() for Pydantic v1
-        input_df = pd.DataFrame([features_dict], columns=feature_names_in_order)
-        
-        print("Applying preprocessor...")
-        processed_features = preprocessor.transform(input_df)
-        print("Preprocessing complete.")
-        print("Applying classifier...")
-        prediction_numeric = classifier.predict(processed_features)
-        print(f"Raw prediction: {prediction_numeric}")
-        
-        label_map_inv = {1: 'Show', 0: 'No-Show'}
-        prediction_label = label_map_inv.get(prediction_numeric[0], 'Unknown Prediction Value')
-        
-        # Return in appropriate format
-        if snowflake_format_response: # This will be true when called from Snowflake via your API GW setup
-            # Snowflake-compatible format
-            row_index = snowflake_payload.data[0][0] # Get the row index sent by Snowflake
-            return {
-                "data": [
-                    [row_index, prediction_label] 
-                ]
-            }
+        if snowflake_format_response:
+            return {"data": response_data_for_snowflake}
         else:
-            # Standard API format for other clients (e.g., direct Postman test without snowflake_format=true)
-            return {"prediction": prediction_label}
+            if len(response_data_for_snowflake) == 1:
+                return {"prediction": response_data_for_snowflake[0][1]}
+            else: 
+                return {"predictions_batch": response_data_for_snowflake} 
             
     except KeyError as ke:
         print(f"Prediction Error: Missing feature - {ke}")
@@ -183,8 +241,9 @@ async def predict(
             detail=f"An unexpected error occurred during prediction: {type(e).__name__}"
         )
 
-# --- Optional: Main block to run Uvicorn directly (remains the same) ---
+# --- Optional: Main block to run Uvicorn directly ---
 if __name__ == "__main__":
-    # ... (your uvicorn.run call) ...
     print("Starting Uvicorn server directly...")
+    # This assumes your FastAPI app instance is named 'app' in a file named 'main.py'
+    # If your file is named differently, adjust "main:app" accordingly.
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
